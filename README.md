@@ -14,7 +14,7 @@ This repository contains the Infrastructure as Code (IaC) configuration for depl
 ## 📂 Repository Structure
 
 ```text
-papermc-infrastructure/
+papermc-ansible/
 ├── .github/workflows/deploy.yml   # GitHub Actions pipeline definition
 ├── inventory/
 │   ├── vps_production.yml         # Cloud environment targets
