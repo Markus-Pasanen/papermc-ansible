@@ -12,6 +12,7 @@ This Ansible playbook automates the deployment of a Minecraft server on a Hetzne
 - 💾 **Automated nightly backups** with retention policy
 - 📝 **Comprehensive logging** for troubleshooting
 - 🆕 **Borg repository initialization** playbook included
+- 🚨 **Disaster recovery** playbook for server restoration after griefing or corruption
 
 ## Prerequisites
 
@@ -38,7 +39,8 @@ This Ansible playbook automates the deployment of a Minecraft server on a Hetzne
 ├── README.md
 ├── playbooks/
 │   ├── deploy-minecraft.yml
-│   └── init-borg-repo.yml
+│   ├── init-borg-repo.yml
+│   └── restore.yml
 └── templates/
   ├── backup.sh.j2
   └── minecraft.service.j2
@@ -53,14 +55,16 @@ git clone https://github.com/Markus-Pasanen/papermc-ansible
 cd papermc-ansible
 ```
 
-### 2. Create Your Inventory File
+### 2. Configure Your Inventory File
 
-Create an `inventory` file:
+Edit the existing `inventory.yml` file with your VPS IP address:
 
-```ini
+```yaml
 [minecraft]
-your-vps-ip ansible_user=root
+YOUR_SERVER_IP_HERE  # Replace with your actual VPS IP address
 ```
+
+The playbooks assume `ansible_user=root` by default for Hetzner VPS.
 
 ### 3. Prepare Your Secrets with Ansible Vault
 
@@ -122,7 +126,7 @@ To adjust the quota, modify the `--storage-quota` value in `init-borg-repo.yml`:
 Once your Borg repository is initialized (or if you already have one with backups), run the main deployment:
 
 ```bash
-ansible-playbook -i inventory deploy.yml --ask-vault-pass
+ansible-playbook -i inventory.yml deploy-minecraft.yml --ask-vault-pass
 ```
 
 ## What Gets Deployed
@@ -137,6 +141,56 @@ ansible-playbook -i inventory deploy.yml --ask-vault-pass
 | Backup Log | `/var/log/minecraft_backup.log` | Backup operation logs |
 | Cron Job | `/etc/cron.d/ansible_minecraft_backup` | Runs backup daily at 2 AM |
 
+## Disaster Recovery
+
+If your Minecraft server gets griefed, corrupted, or needs to be restored from a specific backup, use the disaster recovery playbook:
+
+### Restore from Specific Backup
+
+```bash
+# List available backups to find archive name
+ansible-playbook -i inventory.yml playbooks/restore.yml --ask-vault-pass -e "archive=hostname-2024-01-15_02:00:00"
+```
+
+### Restore from Latest Backup
+
+```bash
+ansible-playbook -i inventory.yml playbooks/restore.yml --ask-vault-pass -e "archive=latest"
+```
+
+### What the Restore Playbook Does
+
+1. **Safety Checks**:
+   - Verifies Borg repository accessibility
+   - Confirms specified archive exists
+   - Lists available archives if specified one not found
+
+2. **User Confirmation**:
+   - Displays clear warning about data replacement
+   - Requires explicit "YES" confirmation
+   - Creates backup of current server files before restore
+
+3. **Restore Process**:
+   - Stops Minecraft service
+   - Backs up current server to `/tmp/minecraft-backup-before-restore-*`
+   - Removes current server files
+   - Extracts backup archive to Minecraft directory
+   - Sets correct ownership and permissions
+   - Starts Minecraft service
+   - Waits for server to initialize
+
+4. **Post-Restore Verification**:
+   - Displays service status
+   - Shows location of old (griefed) server backup
+   - Provides verification commands
+
+### Key Features
+- **Safe**: Creates backup of current state before restore
+- **Interactive**: Requires explicit user confirmation
+- **Flexible**: Restore from specific archive or latest
+- **Comprehensive**: Handles all permissions and service management
+- **Informative**: Clear progress reporting and verification
+
 ## Firewall Configuration
 
 The playbook configures UFW to:
@@ -144,7 +198,7 @@ The playbook configures UFW to:
 - Allow Minecraft server (port 25565 by default)
 - Deny all other incoming traffic
 
-To change the Minecraft port, modify the `server_port` variable in `deploy.yml`.
+To change the Minecraft port, modify the `server_port` variable in `deploy-minecraft.yml`.
 
 ## Backup Retention Policy
 
@@ -178,11 +232,14 @@ sudo /usr/local/bin/minecraft_backup.sh
 
 ### Restore from Specific Backup
 
-```bash
-# List backups to find archive name
-sudo borg list {{ borg_repo }}
+**Note**: For complete server restoration, use the disaster recovery playbook instead of manual commands:
 
-# Restore specific archive
+```bash
+# Use the disaster recovery playbook (recommended)
+ansible-playbook -i inventory.yml playbooks/restore.yml --ask-vault-pass -e "archive=hostname-2024-01-15_02:00:00"
+
+# Manual restore (advanced users only)
+sudo borg list {{ borg_repo }}
 sudo borg extract {{ borg_repo }}::hostname-2024-01-15_02:00:00 --destination /tmp/restore
 ```
 
@@ -223,7 +280,7 @@ Your Borg backup determines the Minecraft version. To upgrade:
 
 ### Modify Backup Schedule
 
-Edit the cron task in `deploy.yml`:
+Edit the cron task in `deploy-minecraft.yml`:
 
 ```yaml
 - name: Schedule nightly backup via cron

@@ -1,0 +1,46 @@
+# Ansible sensitive files
+secrets.yml
+*.retry
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Backup files
+backup-*
+*.bak
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Local overrides
+local.yml
+local_vars.yml
+*.local.yml
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
