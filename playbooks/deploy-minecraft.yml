@@ -1,0 +1,254 @@
+- name: Fetch Minecraft server files from Borg backup and configure server
+  hosts: minecraft
+  become: yes
+  vars_files:
+    - secrets.yml
+  vars:
+    server_port: 25565
+    borg_ssh_key: "/root/.ssh/borg_backup"
+    minecraft_home: "/opt/minecraft"
+    minecraft_user: "minecraft"
+    minecraft_group: "minecraft"
+    minecraft_memory: "4G"
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - openjdk-21-jre-headless
+          - ufw
+          - borgbackup
+          - openssh-client
+          - cron
+        state: present
+
+    - name: Create minecraft directory
+      file:
+        path: "{{ minecraft_home }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create minecraft user
+      user:
+        name: "{{ minecraft_user }}"
+        home: "{{ minecraft_home }}"
+        shell: "/bin/bash"
+        system: yes
+        create_home: no
+        state: present
+
+    - name: Generate SSH key for Borg backups (if not exists)
+      openssh_keypair:
+        path: "{{ borg_ssh_key }}"
+        type: ed25519
+        owner: root
+        group: root
+        mode: '0600'
+        force: no
+      register: borg_key
+
+    - name: Extract Storage Box host from repo URL
+      set_fact:
+        storage_box_host: "{{ borg_repo | regex_replace('^ssh://([^@]+@[^:]+):.*$', '\\1') }}"
+
+    - name: Check if key is already authorized on Storage Box
+      command:
+        cmd: >
+          ssh -p23 -i {{ borg_ssh_key }} 
+          -o StrictHostKeyChecking=accept-new 
+          -o BatchMode=yes 
+          -o ConnectTimeout=10
+          {{ storage_box_host }} 
+          "echo OK"
+      register: ssh_test
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display instructions for adding SSH key to Storage Box
+      debug:
+        msg: |
+          =======================================================
+          MANUAL STEP REQUIRED: Add this public key to your 
+          Hetzner Storage Box:
+          
+          {{ borg_key.public_key }}
+          
+          Run these commands from your LOCAL machine:
+          
+          1. Save the public key to a file:
+             echo '{{ borg_key.public_key }}' > borg_key.pub
+          
+          2. Create .ssh directory on Storage Box (if needed):
+             ssh -p23 {{ storage_box_host }} mkdir -p .ssh
+          
+          3. Upload the public key:
+             scp -P23 borg_key.pub {{ storage_box_host }}:.ssh/authorized_keys
+          
+          4. Set correct permissions:
+             ssh -p23 {{ storage_box_host }} chmod 700 .ssh
+             ssh -p23 {{ storage_box_host }} chmod 600 .ssh/authorized_keys
+          
+          5. Verify the key works:
+             ssh -p23 -i {{ borg_ssh_key }} {{ storage_box_host }} "echo 'SSH connection successful'"
+          =======================================================
+      when: ssh_test.failed
+
+    - name: Wait for user to add SSH key (if needed)
+      pause:
+        prompt: "Press Enter after adding the SSH key to your Storage Box"
+      when: ssh_test.failed
+
+    - name: Test SSH connection again
+      command:
+        cmd: >
+          ssh -p23 -i {{ borg_ssh_key }} 
+          -o StrictHostKeyChecking=accept-new 
+          -o BatchMode=yes 
+          {{ storage_box_host }} 
+          "echo OK"
+      register: ssh_test2
+      changed_when: false
+
+    - name: Fail if SSH still not working
+      fail:
+        msg: "SSH connection to Storage Box still failing. Please check the key was added correctly."
+      when: ssh_test2.failed
+
+    - name: Check if Borg repository exists and is accessible
+      command:
+        cmd: borg info {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: borg_info
+      ignore_errors: yes
+
+    - name: Fail if Borg repository is not accessible
+      fail:
+        msg: "Borg repository {{ borg_repo }} is not accessible. Please check connectivity and credentials."
+      when: borg_info.failed
+
+    - name: Display repository info
+      debug:
+        msg: "Successfully connected to Borg repository: {{ borg_repo }}"
+
+    - name: List available backups
+      command:
+        cmd: borg list {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: backup_list
+      changed_when: false
+
+    - name: Show available backups
+      debug:
+        msg: "Available backups:\n{{ backup_list.stdout }}"
+
+    - name: Extract latest Minecraft server files from backup
+      command:
+        cmd: >
+          borg extract {{ borg_repo }}::latest
+          --destination {{ minecraft_home }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+
+    - name: Ensure correct ownership of extracted files
+      file:
+        path: "{{ minecraft_home }}"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        recurse: yes
+        state: directory
+
+    - name: Ensure all files have correct permissions
+      shell:
+        cmd: |
+          find {{ minecraft_home }} -type f -not -name "*.sh" -exec chmod 644 {} \;
+          find {{ minecraft_home }} -type d -exec chmod 755 {} \;
+          find {{ minecraft_home }} -name "*.sh" -exec chmod 755 {} \;
+          [ -f {{ minecraft_home }}/server.jar ] && chmod 644 {{ minecraft_home }}/server.jar
+          [ -f {{ minecraft_home }}/minecraft_server*.jar ] && chmod 644 {{ minecraft_home }}/minecraft_server*.jar
+
+    - name: Configure UFW - Allow SSH
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+        comment: SSH
+
+    - name: Configure UFW - Allow Minecraft port
+      ufw:
+        rule: allow
+        port: '{{ server_port }}'
+        proto: tcp
+        comment: Minecraft server
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Create systemd service file for Minecraft
+      template:
+        src: minecraft.service.j2
+        dest: /etc/systemd/system/minecraft.service
+        mode: '0644'
+      notify: restart minecraft
+
+    - name: Start and enable Minecraft service
+      systemd:
+        name: minecraft
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Create backup script from template
+      template:
+        src: backup.sh.j2
+        dest: /usr/local/bin/minecraft_backup.sh
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create log file for backups
+      file:
+        path: /var/log/minecraft_backup.log
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Schedule nightly backup via cron
+      cron:
+        name: "Minecraft server nightly backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/minecraft_backup.sh >> /var/log/minecraft_backup.log 2>&1"
+        user: root
+        cron_file: ansible_minecraft_backup
+
+    - name: Test backup script syntax
+      command:
+        cmd: bash -n /usr/local/bin/minecraft_backup.sh
+      changed_when: false
+      ignore_errors: yes
+      register: script_test
+
+    - name: Warn if backup script has syntax errors
+      debug:
+        msg: "Warning: Backup script has syntax errors: {{ script_test.stderr }}"
+      when: script_test.failed
+
+  handlers:
+    - name: restart minecraft
+      systemd:
+        name: minecraft
+        state: restarted
+        daemon_reload: yes

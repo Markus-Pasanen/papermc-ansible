@@ -1,0 +1,132 @@
+#!/bin/bash
+
+# Borg backup script for Minecraft server
+# This script backs up the Minecraft server directory to Hetzner Storage Box
+
+# Set strict error handling
+set -euo pipefail
+
+# Borg repository configuration - using variables from Ansible
+export BORG_REPO="{{ borg_repo }}"
+export BORG_PASSPHRASE="{{ borg_passphrase }}"
+export BORG_RSH="ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+
+# Path to Minecraft server directory
+MINECRAFT_DIR="{{ minecraft_home }}"
+
+# Log file for backup operations
+LOG_FILE="/var/log/minecraft_backup.log"
+
+# Helper function for logging
+info() { 
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
+}
+
+# Error handling
+error_exit() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ERROR: $*" | tee -a "$LOG_FILE" >&2
+    exit 1
+}
+
+# Set trap for interruptions
+trap 'echo "$(date) - Backup interrupted" | tee -a "$LOG_FILE"; exit 2' INT TERM
+
+# Check if Minecraft directory exists
+if [ ! -d "$MINECRAFT_DIR" ]; then
+    error_exit "Minecraft directory $MINECRAFT_DIR does not exist"
+fi
+
+# Check if Borg repository is reachable
+info "Checking Borg repository connectivity"
+if ! borg list :: 2>/dev/null | grep -q .; then
+    error_exit "Cannot access Borg repository $BORG_REPO"
+fi
+
+info "Starting Minecraft server backup"
+
+# Create backup archive
+# Archive name format: {hostname}-{timestamp}
+# Backs up the entire Minecraft directory
+borg create                                 \
+    --verbose                               \
+    --filter AME                            \
+    --list                                  \
+    --stats                                 \
+    --show-rc                               \
+    --compression lz4                       \
+    --exclude-caches                        \
+    --exclude '*.log'                       \
+    --exclude '*/logs/*'                    \
+    --exclude '*/cache/*'                   \
+    --exclude '*/tmp/*'                      \
+    ::'{hostname}-{now:%Y-%m-%d_%H:%M:%S}'  \
+    "$MINECRAFT_DIR"
+
+backup_exit=$?
+
+if [ $backup_exit -eq 0 ]; then
+    info "Backup created successfully"
+elif [ $backup_exit -eq 1 ]; then
+    info "Backup created with warnings"
+else
+    error_exit "Backup failed with exit code $backup_exit"
+fi
+
+info "Pruning old backups"
+
+# Prune old archives to maintain:
+# - 7 daily backups
+# - 4 weekly backups  
+# - 6 monthly backups
+borg prune                              \
+    --list                              \
+    --glob-archives '{hostname}-*'      \
+    --show-rc                           \
+    --keep-daily 7                      \
+    --keep-weekly 4                     \
+    --keep-monthly 6                    
+
+prune_exit=$?
+
+if [ $prune_exit -eq 0 ]; then
+    info "Pruning completed successfully"
+elif [ $prune_exit -eq 1 ]; then
+    info "Pruning completed with warnings"
+else
+    error_exit "Pruning failed with exit code $prune_exit"
+fi
+
+info "Compacting repository"
+
+# Free up disk space by compacting segments
+borg compact
+
+compact_exit=$?
+
+if [ $compact_exit -eq 0 ]; then
+    info "Compaction completed successfully"
+elif [ $compact_exit -eq 1 ]; then
+    info "Compaction completed with warnings"
+else
+    error_exit "Compaction failed with exit code $compact_exit"
+fi
+
+# Calculate global exit code (highest of all operations)
+global_exit=$(( backup_exit > prune_exit ? backup_exit : prune_exit ))
+global_exit=$(( compact_exit > global_exit ? compact_exit : global_exit ))
+
+# Final status message
+if [ ${global_exit} -eq 0 ]; then
+    info "Backup, prune, and compact completed successfully"
+elif [ ${global_exit} -eq 1 ]; then
+    info "Backup, prune, and/or compact completed with warnings"
+else
+    info "Backup, prune, and/or compact completed with errors"
+fi
+
+# Log backup size info
+if [ -f "$MINECRAFT_DIR" ]; then
+    du -sh "$MINECRAFT_DIR" | awk '{print "Minecraft directory size: " $1}' | tee -a "$LOG_FILE"
+fi
+
+exit ${global_exit}
