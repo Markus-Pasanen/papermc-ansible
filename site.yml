@@ -1,0 +1,50 @@
+- name: Create directory structure
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ minecraft_scripts_dir }}"
+    - "{{ minecraft_server_dir }}"
+    - "{{ minecraft_logs_dir }}"
+
+- name: Create minecraft user
+  user:
+    name: "{{ minecraft_user }}"
+    home: "{{ minecraft_server_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+
+- name: Set ownership of minecraft server directory
+  file:
+    path: "{{ minecraft_server_dir }}"
+    owner: "{{ minecraft_user }}"
+    group: "{{ minecraft_user }}"
+    recurse: yes
+
+- name: Deploy backup script
+  template:
+    src: templates/backup-borg.sh.j2
+    dest: "{{ minecraft_scripts_dir }}/backup-borg.sh"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy restore script
+  template:
+    src: templates/restore-borg.sh.j2
+    dest: "{{ minecraft_scripts_dir }}/restore-borg.sh"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy start script
+  template:
+    src: templates/start-minecraft.sh.j2
+    dest: "{{ minecraft_scripts_dir }}/start-minecraft.sh"
+    owner: "{{ minecraft_user }}"
+    group: "{{ minecraft_user }}"
+    mode: "0755"

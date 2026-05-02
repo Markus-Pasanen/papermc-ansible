@@ -1,0 +1,38 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# {{ minecraft_scripts_dir }}/restore-borg.sh
+# Usage: restore-borg.sh --list | restore-borg.sh [YYYY-MM-DD]
+
+source /etc/borg-passphrase
+
+REPO="{{ borg_repo }}"
+MINECRAFT_DIR="{{ minecraft_server_dir }}"
+ARCHIVE="$1"
+
+if [ "$1" = "--list" ] || [ "$1" = "-l" ]; then
+    borg list "$REPO"
+    exit 0
+fi
+
+if [ -z "$ARCHIVE" ]; then
+    ARCHIVE=$(borg list "$REPO" | tail -1 | awk '{print $1}')
+    if [ -z "$ARCHIVE" ]; then
+        echo "ERROR: No backups found in repository"
+        exit 1
+    fi
+    echo "No archive specified. Restoring latest: $ARCHIVE"
+fi
+
+if ! borg list "$REPO" | grep -q "$ARCHIVE"; then
+    echo "ERROR: Archive '$ARCHIVE' not found"
+    exit 1
+fi
+
+systemctl stop {{ minecraft_service }}.service
+rm -rf "$MINECRAFT_DIR"/*
+cd /
+borg extract "$REPO::$ARCHIVE"
+chown -R {{ minecraft_user }}:{{ minecraft_user }} "$MINECRAFT_DIR"
+systemctl start {{ minecraft_service }}.service
+
+echo "Restored $ARCHIVE successfully"

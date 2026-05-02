@@ -1,0 +1,18 @@
+[Unit]
+Description=PaperMC Minecraft Server
+After=network.target
+
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+WorkingDirectory={{ minecraft_server_dir }}
+ExecStart={{ minecraft_scripts_dir }}/start-minecraft.sh
+Restart=on-failure
+RestartSec=10
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

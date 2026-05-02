@@ -1,0 +1,31 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# {{ minecraft_scripts_dir }}/backup-borg.sh
+
+source /etc/borg-passphrase
+
+LOG_DIR="{{ minecraft_logs_dir }}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/backup-$(date +%Y%m%d_%H%M%S).log"
+
+systemctl stop {{ minecraft_service }}.service
+
+{
+    borg create \
+        --stats \
+        --compression lz4 \
+        --exclude 'cache' \
+        {{ borg_repo }}::'{now:%Y-%m-%d}' \
+        {{ minecraft_server_dir }}
+    
+    borg prune \
+        --keep-daily {{ keep_daily }} \
+        --keep-weekly {{ keep_weekly }} \
+        --keep-monthly {{ keep_monthly }} \
+        {{ borg_repo }}
+    
+    find "$LOG_DIR" -name "backup-*.log" -type f -mtime +14 -delete
+    
+} >> "$LOG_FILE" 2>&1
+
+systemctl start {{ minecraft_service }}.service

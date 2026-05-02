@@ -1,0 +1,8 @@
+all:
+  hosts:
+    minecraft-server:
+      ansible_host: YOUR_VPS_IP
+      ansible_user: root
+      # Or if using non-root:
+      # ansible_user: ubuntu
+      # ansible_become: yes

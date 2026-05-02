@@ -1,0 +1,20 @@
+# Borg configuration
+borg_repo: "ssh://u411517@u411517.your-storagebox.de:23/./backups/minecraft"
+borg_passphrase: "YOUR_SECURE_PASSPHRASE_HERE"
+
+# Directories
+minecraft_scripts_dir: /opt/minecraft-scripts
+minecraft_server_dir: /opt/minecraft-server
+minecraft_logs_dir: /opt/minecraft-logs
+
+# Service
+minecraft_user: minecraft
+minecraft_service: minecraft
+
+# Backup retention
+keep_daily: 14
+keep_weekly: 8
+keep_monthly: 3
+
+# Restore from latest backup after deployment
+restore_latest_backup: true
