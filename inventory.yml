@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 all:
   hosts:
     minecraft-server:
@@ -6,3 +7,7 @@ all:
       # Or if using non-root:
       # ansible_user: ubuntu
       # ansible_become: yes
+=======
+[minecraft]
+YOUR_SERVER_IP_HERE
+>>>>>>> 26ec5fafcdf9ad475e11765c3e5cb01c0cf9fb07

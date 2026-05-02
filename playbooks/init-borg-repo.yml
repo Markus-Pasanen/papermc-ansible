@@ -1,0 +1,85 @@
+- name: Initialize Borg backup repository on Hetzner Storage Box
+  hosts: localhost
+  connection: local
+  vars_files:
+    - secrets.yml
+  vars:
+    backup_path: "./backups/minecraft"  # Path on Storage Box for the repo
+  tasks:
+    - name: Display information
+      debug:
+        msg: |
+          =======================================================
+          Borg Repository Initialization
+          =======================================================
+          Repository: {{ borg_repo }}
+          World size: ~10 GB
+          Backup strategy: 7 daily, 4 weekly, 6 monthly
+          Estimated storage needed: 150-200 GB
+          Quota setting: 250 GB (safety buffer)
+          =======================================================
+
+    - name: Check if Borg repository already exists
+      command:
+        cmd: borg list {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+      register: repo_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display repository status
+      debug:
+        msg: "Borg repository already exists at {{ borg_repo }}"
+      when: not repo_check.failed
+
+    - name: Initialize Borg repository (if not exists)
+      command:
+        cmd: >
+          borg init --encryption=repokey-blake2
+          --storage-quota 250G
+          --make-parent-dirs
+          {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+      register: init_result
+      when: repo_check.failed
+
+    - name: Display initialization result
+      debug:
+        msg: "✅ Borg repository initialized successfully at {{ borg_repo }}"
+      when: init_result is defined and not init_result.failed
+
+    - name: Show repository details
+      command:
+        cmd: borg info {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+      register: repo_info
+      changed_when: false
+
+    - name: Display repository information
+      debug:
+        msg: |
+          =======================================================
+          REPOSITORY INFORMATION
+          =======================================================
+          {{ repo_info.stdout }}
+          =======================================================
+          
+          📊 STORAGE ESTIMATES:
+          • World size: ~10 GB
+          • Daily backups (7): ~70 GB (if no deduplication)
+          • Weekly backups (4): ~40 GB (additional unique data)
+          • Monthly backups (6): ~60 GB (additional unique data)
+          • Borg deduplication: Significantly reduces actual storage
+          • Quota set to: 250 GB (provides safety buffer)
+          
+          Your repository is ready for backups!
+          
+          To create your first backup:
+          export BORG_PASSPHRASE='{{ borg_passphrase }}'
+          borg create --stats {{ borg_repo }}::{{ ansible_hostname }}-$(date +%Y-%m-%d) /path/to/your/minecraft
+          
+          To monitor storage usage:
+          borg info {{ borg_repo }}

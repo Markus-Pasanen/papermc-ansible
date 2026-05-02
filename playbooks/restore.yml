@@ -1,0 +1,223 @@
+- name: Restore Minecraft server from specific backup after griefing
+  hosts: minecraft
+  become: yes
+  vars_files:
+    - secrets.yml
+  vars:
+    minecraft_home: "/opt/minecraft"
+    minecraft_user: "minecraft"
+    minecraft_group: "minecraft"
+    borg_ssh_key: "/root/.ssh/borg_backup"
+    backup_archive: "{{ archive | default('latest') }}"  # Pass with -e "archive=hostname-2024-01-15_02:00:00"
+  tasks:
+    - name: Display restore information
+      debug:
+        msg: |
+          =======================================================
+          🔴 MINECRAFT SERVER RESTORE
+          =======================================================
+          Server: {{ inventory_hostname }}
+          Restore from: {{ backup_archive }}
+          Minecraft directory: {{ minecraft_home }}
+          =======================================================
+
+    - name: Check if Borg repository is accessible
+      command:
+        cmd: borg list {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: repo_check
+      ignore_errors: yes
+
+    - name: Fail if repository not accessible
+      fail:
+        msg: "❌ Cannot access Borg repository {{ borg_repo }}. Check connectivity and credentials."
+      when: repo_check.failed
+
+    - name: Check if specified archive exists
+      command:
+        cmd: borg list {{ borg_repo }}::{{ backup_archive }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: archive_check
+      ignore_errors: yes
+      when: backup_archive != 'latest'
+
+    - name: List available archives if specified archive not found
+      command:
+        cmd: borg list {{ borg_repo }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: archive_list
+      when: backup_archive != 'latest' and archive_check.failed
+
+    - name: Fail if specified archive doesn't exist
+      fail:
+        msg: |
+          ❌ Archive '{{ backup_archive }}' not found in repository.
+          
+          Available archives:
+          {{ archive_list.stdout if archive_list is defined else 'Run with -e "archive=latest" or check repository manually' }}
+      when: backup_archive != 'latest' and archive_check.failed
+
+    - name: Get archive details (for latest)
+      command:
+        cmd: borg list --format '{archive} {time} {size} {num_files} files\n' {{ borg_repo }}::latest
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: archive_details
+      when: backup_archive == 'latest'
+
+    - name: Get archive details (for specified)
+      command:
+        cmd: borg list --format '{archive} {time} {size} {num_files} files\n' {{ borg_repo }}::{{ backup_archive }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: archive_details
+      when: backup_archive != 'latest'
+
+    - name: Display archive details
+      debug:
+        msg: |
+          =======================================================
+          📦 ARCHIVE DETAILS
+          =======================================================
+          {{ archive_details.stdout }}
+          =======================================================
+
+    - name: Show warning and require confirmation
+      pause:
+        prompt: |
+          ⚠️  WARNING: This will COMPLETELY REPLACE your current Minecraft server!
+          
+          Server: {{ inventory_hostname }}
+          Restore point: {{ backup_archive }}
+          Directory: {{ minecraft_home }}
+          
+          Current server files will be backed up to /tmp/minecraft-backup-before-restore-{{ ansible_date_time.epoch }}
+          
+          Type 'YES' (uppercase) to continue:
+      register: confirmation
+
+    - name: Stop if not confirmed
+      fail:
+        msg: "Restore cancelled by user"
+      when: confirmation.user_input != 'YES'
+
+    - name: Check if Minecraft service is running
+      command: systemctl is-active minecraft
+      register: service_status
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Stop Minecraft service
+      systemd:
+        name: minecraft
+        state: stopped
+      when: service_status.rc == 0
+
+    - name: Confirm service stopped
+      debug:
+        msg: "✅ Minecraft service stopped"
+      when: service_status.rc == 0
+
+    - name: Create backup of current server (just in case)
+      command:
+        cmd: cp -a {{ minecraft_home }} /tmp/minecraft-backup-before-restore-{{ ansible_date_time.epoch }}
+      when: minecraft_home is defined
+
+    - name: Remove current server files
+      file:
+        path: "{{ minecraft_home }}"
+        state: absent
+
+    - name: Recreate minecraft directory
+      file:
+        path: "{{ minecraft_home }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+
+    - name: Restore from backup
+      command:
+        cmd: >
+          borg extract {{ borg_repo }}::{{ backup_archive }}
+          --destination {{ minecraft_home }}
+      environment:
+        BORG_PASSPHRASE: "{{ borg_passphrase }}"
+        BORG_RSH: "ssh -i {{ borg_ssh_key }} -p23 -o StrictHostKeyChecking=accept-new"
+      register: restore_result
+
+    - name: Display restore result
+      debug:
+        msg: "✅ Files restored successfully from {{ backup_archive }}"
+      when: not restore_result.failed
+
+    - name: Ensure correct ownership of restored files
+      file:
+        path: "{{ minecraft_home }}"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        recurse: yes
+        state: directory
+
+    - name: Ensure all files have correct permissions
+      shell:
+        cmd: |
+          find {{ minecraft_home }} -type f -not -name "*.sh" -exec chmod 644 {} \;
+          find {{ minecraft_home }} -type d -exec chmod 755 {} \;
+          find {{ minecraft_home }} -name "*.sh" -exec chmod 755 {} \;
+          [ -f {{ minecraft_home }}/server.jar ] && chmod 644 {{ minecraft_home }}/server.jar
+          [ -f {{ minecraft_home }}/minecraft_server*.jar ] && chmod 644 {{ minecraft_home }}/minecraft_server*.jar
+
+    - name: Start Minecraft service
+      systemd:
+        name: minecraft
+        state: started
+
+    - name: Wait for server to initialize
+      wait_for:
+        port: 25565
+        host: "{{ inventory_hostname }}"
+        delay: 5
+        timeout: 60
+      ignore_errors: yes
+
+    - name: Check service status after restore
+      command: systemctl status minecraft --no-pager
+      register: final_status
+      changed_when: false
+
+    - name: Display final status
+      debug:
+        msg: |
+          =======================================================
+          ✅ RESTORE COMPLETE
+          =======================================================
+          
+          Server restored from: {{ backup_archive }}
+          Minecraft directory: {{ minecraft_home }}
+          
+          Service status:
+          {{ final_status.stdout }}
+          
+          A backup of your previous (griefed) server is at:
+          /tmp/minecraft-backup-before-restore-{{ ansible_date_time.epoch }}
+          
+          To verify everything works:
+          sudo -u minecraft ls -la {{ minecraft_home }}
+          sudo journalctl -u minecraft -n 20
+          =======================================================
+
+    - name: Show warning about old backup
+      debug:
+        msg: |
+          ⚠️  Remember to clean up the backup of your griefed server when you're sure everything is working:
+          
+          sudo rm -rf /tmp/minecraft-backup-before-restore-{{ ansible_date_time.epoch }}
