@@ -1,106 +1,123 @@
-- name: Update apt cache and install Java 25 JRE
-  apt:
-    name: openjdk-25-jre
-    state: present
-    update_cache: yes
-    cache_valid_time: 3600
+- hosts: all
+  become: yes
+  vars_files:
+    - vars.yml
+  tasks:
+    - name: Update apt cache and install Java 25 JRE
+      apt:
+        name: openjdk-25-jre
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
 
-- name: Ensure UFW is installed
-  apt:
-    name: ufw
-    state: present
-    update_cache: no
+    - name: Ensure UFW is installed
+      apt:
+        name: ufw
+        state: present
+        update_cache: no
 
-- name: Ensure UFW is enabled
-  ufw:
-    state: enabled
-    policy: allow
+    - name: Ensure UFW is enabled
+      ufw:
+        state: enabled
+        policy: allow
 
-- name: Allow Minecraft TCP port 25565
-  ufw:
-    rule: allow
-    port: 25565
-    proto: tcp
+    - name: Allow Minecraft TCP port 25565
+      ufw:
+        rule: allow
+        port: 25565
+        proto: tcp
 
-- name: Allow Minecraft UDP port 25565
-  ufw:
-    rule: allow
-    port: 25565
-    proto: udp
+    - name: Allow Minecraft UDP port 25565
+      ufw:
+        rule: allow
+        port: 25565
+        proto: udp
 
-- name: Create directory structure
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  loop:
-    - "{{ minecraft_scripts_dir }}"
-    - "{{ minecraft_server_dir }}"
-    - "{{ minecraft_logs_dir }}"
+    - name: Deploy Borg passphrase file
+      copy:
+        content: "BORG_PASSPHRASE=\"{{ borg_passphrase }}\""
+        dest: /etc/borg-passphrase
+        owner: root
+        group: root
+        mode: "0600"
 
-- name: Create minecraft user
-  user:
-    name: "{{ minecraft_user }}"
-    home: "{{ minecraft_server_dir }}"
-    shell: /bin/bash
-    system: yes
-    create_home: yes
+    - name: Create directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ minecraft_scripts_dir }}"
+        - "{{ minecraft_server_dir }}"
+        - "{{ minecraft_logs_dir }}"
 
-- name: Set ownership of minecraft server directory
-  file:
-    path: "{{ minecraft_server_dir }}"
-    owner: "{{ minecraft_user }}"
-    group: "{{ minecraft_user }}"
-    recurse: yes
+    - name: Create minecraft user
+      user:
+        name: "{{ minecraft_user }}"
+        home: "{{ minecraft_server_dir }}"
+        shell: /bin/bash
+        system: yes
+        create_home: yes
 
-- name: Deploy backup script
-  template:
-    src: templates/backup-borg.sh.j2
-    dest: "{{ minecraft_scripts_dir }}/backup-borg.sh"
-    owner: root
-    group: root
-    mode: "0755"
+    - name: Set ownership of minecraft server directory
+      file:
+        path: "{{ minecraft_server_dir }}"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_user }}"
+        recurse: yes
 
-- name: Install daily backup cron job
-  cron:
-    name: "Minecraft backup"
-    minute: "0"
-    hour: "2"
-    day: "*"
-    month: "*"
-    weekday: "*"
-    user: root
-    job: "{{ minecraft_scripts_dir }}/backup-borg.sh"
+    - name: Deploy backup script
+      template:
+        src: templates/backup-borg.sh.j2
+        dest: "{{ minecraft_scripts_dir }}/backup-borg.sh"
+        owner: root
+        group: root
+        mode: "0755"
 
-- name: Deploy restore script
-  template:
-    src: templates/restore-borg.sh.j2
-    dest: "{{ minecraft_scripts_dir }}/restore-borg.sh"
-    owner: root
-    group: root
-    mode: "0755"
+    - name: Install daily backup cron job
+      cron:
+        name: "Minecraft backup"
+        minute: "0"
+        hour: "2"
+        day: "*"
+        month: "*"
+        weekday: "*"
+        user: root
+        job: "{{ minecraft_scripts_dir }}/backup-borg.sh"
 
-- name: Deploy start script
-  template:
-    src: templates/start-minecraft.sh.j2
-    dest: "{{ minecraft_scripts_dir }}/start-minecraft.sh"
-    owner: "{{ minecraft_user }}"
-    group: "{{ minecraft_user }}"
-    mode: "0755"
+    - name: Deploy restore script
+      template:
+        src: templates/restore-borg.sh.j2
+        dest: "{{ minecraft_scripts_dir }}/restore-borg.sh"
+        owner: root
+        group: root
+        mode: "0755"
 
-- name: Deploy minecraft systemd service unit
-  template:
-    src: files/minecraft.service
-    dest: /etc/systemd/system/minecraft.service
-    owner: root
-    group: root
-    mode: "0644"
+    - name: Deploy start script
+      template:
+        src: templates/start-minecraft.sh.j2
+        dest: "{{ minecraft_scripts_dir }}/start-minecraft.sh"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_user }}"
+        mode: "0755"
 
-- name: Reload systemd and enable/start minecraft service
-  systemd:
-    daemon_reload: yes
-    name: minecraft.service
-    enabled: yes
-    state: started
+    - name: Deploy minecraft systemd service unit
+      template:
+        src: templates/minecraft.service.j2
+        dest: /etc/systemd/system/minecraft.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload systemd and enable/start minecraft service
+      systemd:
+        daemon_reload: yes
+        name: minecraft.service
+        enabled: yes
+        state: started
+
+    - name: Restore latest backup on first deploy
+      shell: "{{ minecraft_scripts_dir }}/restore-borg.sh"
+      when: restore_latest_backup | default(false) | bool

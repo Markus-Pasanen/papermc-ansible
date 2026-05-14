@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=minecraft
-Group=minecraft
+User={{ minecraft_user }}
+Group={{ minecraft_user }}
 WorkingDirectory={{ minecraft_server_dir }}
 ExecStart={{ minecraft_scripts_dir }}/start-minecraft.sh
 Restart=on-failure
