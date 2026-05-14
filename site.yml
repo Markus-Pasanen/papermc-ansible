@@ -1,3 +1,33 @@
+- name: Update apt cache and install Java 25 JRE
+  apt:
+    name: openjdk-25-jre
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Ensure UFW is installed
+  apt:
+    name: ufw
+    state: present
+    update_cache: no
+
+- name: Ensure UFW is enabled
+  ufw:
+    state: enabled
+    policy: allow
+
+- name: Allow Minecraft TCP port 25565
+  ufw:
+    rule: allow
+    port: 25565
+    proto: tcp
+
+- name: Allow Minecraft UDP port 25565
+  ufw:
+    rule: allow
+    port: 25565
+    proto: udp
+
 - name: Create directory structure
   file:
     path: "{{ item }}"
@@ -33,6 +63,17 @@
     group: root
     mode: "0755"
 
+- name: Install daily backup cron job
+  cron:
+    name: "Minecraft backup"
+    minute: "0"
+    hour: "2"
+    day: "*"
+    month: "*"
+    weekday: "*"
+    user: root
+    job: "{{ minecraft_scripts_dir }}/backup-borg.sh"
+
 - name: Deploy restore script
   template:
     src: templates/restore-borg.sh.j2
@@ -48,3 +89,18 @@
     owner: "{{ minecraft_user }}"
     group: "{{ minecraft_user }}"
     mode: "0755"
+
+- name: Deploy minecraft systemd service unit
+  template:
+    src: files/minecraft.service
+    dest: /etc/systemd/system/minecraft.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reload systemd and enable/start minecraft service
+  systemd:
+    daemon_reload: yes
+    name: minecraft.service
+    enabled: yes
+    state: started
